@@ -29,7 +29,7 @@ build() {
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
         -DCMAKE_INSTALL_PREFIX="${_cmake_prefix}" \
-        -DCMAKE_INSTALL_LIBDIR=lib \
+        -DCMAKE_INSTALL_LIBDIR=usr/lib \
         -DCMAKE_INSTALL_RPATH=
     cmake --build build
 }
