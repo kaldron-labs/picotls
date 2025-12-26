@@ -1,0 +1,8 @@
+--regex-C=/^\s*PTLS_CALLBACK_TYPE0\(\s*\w+\s*,\s*(\w+)/st_ptls_\1_t/s,struct/
+--regex-C=/^\s*PTLS_CALLBACK_TYPE0\(\s*\w+\s*,\s*(\w+)/ptls_\1_t/t,typedef/
+--regex-C=/^\s*PTLS_CALLBACK_TYPE\(\s*\w+\s*,\s*(\w+)/st_ptls_\1_t/s,struct/
+--regex-C=/^\s*PTLS_CALLBACK_TYPE\(\s*\w+\s*,\s*(\w+)/ptls_\1_t/t,typedef/
+--regex-C++=/^\s*PTLS_CALLBACK_TYPE0\(\s*\w+\s*,\s*(\w+)/st_ptls_\1_t/s,struct/
+--regex-C++=/^\s*PTLS_CALLBACK_TYPE0\(\s*\w+\s*,\s*(\w+)/ptls_\1_t/t,typedef/
+--regex-C++=/^\s*PTLS_CALLBACK_TYPE\(\s*\w+\s*,\s*(\w+)/st_ptls_\1_t/s,struct/
+--regex-C++=/^\s*PTLS_CALLBACK_TYPE\(\s*\w+\s*,\s*(\w+)/ptls_\1_t/t,typedef/
