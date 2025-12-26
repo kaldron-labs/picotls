@@ -290,7 +290,10 @@ IF (BUILD_FUZZER)
 ENDIF()
 
 if (NOT CMAKE_INSTALL_INCLUDEDIR)
-    set(CMAKE_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_PREFIX}/include/picotls)
+    set(CMAKE_INSTALL_INCLUDEDIR include/picotls)
+endif()
+if (NOT CMAKE_INSTALL_LIBDIR)
+    set(CMAKE_INSTALL_LIBDIR lib)
 endif()
 
 install(FILES include/picotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
@@ -325,4 +328,67 @@ if (TARGET picotls-mbedtls)
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+endif()
+
+set(PICOTLS_PKGCONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
+set(PICOTLS_PKGCONFIG_VERSION "${PROJECT_VERSION}")
+if (PICOTLS_PKGCONFIG_VERSION STREQUAL "")
+    set(PICOTLS_PKGCONFIG_VERSION "0")
+endif()
+
+function(install_pkgconfig name description libs requires requires_private libs_private)
+    set(PICOTLS_PC_NAME "${name}")
+    set(PICOTLS_PC_DESCRIPTION "${description}")
+    string(REPLACE ";" " " PICOTLS_PC_LIBS "${libs}")
+    string(REPLACE ";" " " PICOTLS_PC_REQUIRES "${requires}")
+    string(REPLACE ";" " " PICOTLS_PC_REQUIRES_PRIVATE "${requires_private}")
+    string(REPLACE ";" " " PICOTLS_PC_LIBS_PRIVATE "${libs_private}")
+    set(PICOTLS_PC_PREFIX "${CMAKE_INSTALL_PREFIX}")
+    set(PICOTLS_PC_EXEC_PREFIX "\${prefix}")
+    if (IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+        set(PICOTLS_PC_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
+    else()
+        set(PICOTLS_PC_LIBDIR "\${exec_prefix}/${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    if (IS_ABSOLUTE "${CMAKE_INSTALL_INCLUDEDIR}")
+        set(PICOTLS_PC_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
+    else()
+        set(PICOTLS_PC_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+    endif()
+    set(PICOTLS_PC_VERSION "${PICOTLS_PKGCONFIG_VERSION}")
+
+    configure_file(cmake/picotls.pc.in "${CMAKE_CURRENT_BINARY_DIR}/${name}.pc" @ONLY)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${name}.pc" DESTINATION "${PICOTLS_PKGCONFIG_DIR}")
+endfunction()
+
+set(PICOTLS_CORE_LIBS "-lpicotls-core")
+set(PICOTLS_CORE_REQUIRES "")
+set(PICOTLS_CORE_REQUIRES_PRIVATE "")
+set(PICOTLS_CORE_LIBS_PRIVATE "")
+if (BROTLI_DEC_FOUND AND BROTLI_ENC_FOUND)
+    set(PICOTLS_CORE_REQUIRES_PRIVATE "libbrotlidec libbrotlienc")
+    foreach(dir ${CORE_EXTRA_LIBS_DIRS})
+        list(APPEND PICOTLS_CORE_LIBS_PRIVATE "-L${dir}")
+    endforeach()
+    list(APPEND PICOTLS_CORE_LIBS_PRIVATE ${CORE_EXTRA_LIBS})
+endif()
+install_pkgconfig("picotls-core" "picotls core TLS library" "${PICOTLS_CORE_LIBS}"
+    "${PICOTLS_CORE_REQUIRES}" "${PICOTLS_CORE_REQUIRES_PRIVATE}" "${PICOTLS_CORE_LIBS_PRIVATE}")
+
+install_pkgconfig("picotls-minicrypto" "picotls minicrypto backend" "-lpicotls-minicrypto"
+    "picotls-core" "" "")
+
+if (TARGET picotls-fusion)
+    install_pkgconfig("picotls-fusion" "picotls fusion AES-GCM engine" "-lpicotls-fusion"
+        "picotls-core" "" "")
+endif()
+
+if (TARGET picotls-openssl)
+    install_pkgconfig("picotls-openssl" "picotls OpenSSL backend" "-lpicotls-openssl"
+        "picotls-core openssl" "" "${AEGIS_LIBRARIES};${CMAKE_DL_LIBS}")
+endif()
+
+if (TARGET picotls-mbedtls)
+    install_pkgconfig("picotls-mbedtls" "picotls mbedtls backend" "-lpicotls-mbedtls"
+        "picotls-core mbedtls" "" "${MBEDTLS_LIBRARIES}")
 endif()
