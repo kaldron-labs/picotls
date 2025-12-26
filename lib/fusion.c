@@ -60,7 +60,7 @@
 #define NO_SANITIZE_ADDRESS
 #endif
 
-#ifdef _WINDOWS
+#ifdef _WIN32
 #define aligned_alloc(a, s) _aligned_malloc((s), (a))
 #define aligned_free(p) _aligned_free(p)
 #else
@@ -2228,7 +2228,7 @@ ptls_cipher_algorithm_t ptls_fusion_quiclb = {
     .setup_crypto = fusion_quiclb_setup_crypto,
 };
 
-#ifdef _WINDOWS
+#ifdef _WIN32
 /**
  * ptls_fusion_is_supported_by_cpu:
  * Check that the CPU has extended instructions for PCMUL, AES and AVX2.

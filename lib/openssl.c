@@ -20,7 +20,7 @@
  * IN THE SOFTWARE.
  */
 
-#ifdef _WINDOWS
+#ifdef _WIN32
 #include "wincompat.h"
 #else
 #include <unistd.h>
@@ -60,7 +60,7 @@
 #endif
 #include "./quiclb-impl.h"
 
-#ifdef _WINDOWS
+#ifdef _MSC_VER
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 #endif
