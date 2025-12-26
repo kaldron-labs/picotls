@@ -1,0 +1,13 @@
+prefix=@PICOTLS_PC_PREFIX@
+exec_prefix=@PICOTLS_PC_EXEC_PREFIX@
+libdir=@PICOTLS_PC_LIBDIR@
+includedir=@PICOTLS_PC_INCLUDEDIR@
+
+Name: @PICOTLS_PC_NAME@
+Description: @PICOTLS_PC_DESCRIPTION@
+Version: @PICOTLS_PC_VERSION@
+Requires: @PICOTLS_PC_REQUIRES@
+Requires.private: @PICOTLS_PC_REQUIRES_PRIVATE@
+Libs: -L${libdir} @PICOTLS_PC_LIBS@
+Libs.private: @PICOTLS_PC_LIBS_PRIVATE@
+Cflags: -I${includedir}
