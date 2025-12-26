@@ -35,3 +35,6 @@ deps/picotest
 /src/esni.c
 /t/assets
 /.travis.yml
+/pkg/
+*.tar
+*.tar.*
