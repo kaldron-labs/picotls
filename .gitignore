@@ -38,3 +38,6 @@ deps/picotest
 /pkg/
 *.tar
 *.tar.*
+GPATH
+GRTAGS
+GTAGS
