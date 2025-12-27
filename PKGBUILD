@@ -11,7 +11,7 @@ license=('MIT')
 arch=('x86_64')
 depends=('openssl' 'brotli')
 makedepends=('cmake' 'git' 'pkgconf')
-_cmake_prefix=/
+_cmake_prefix=/usr
 if [[ -n ${MINGW_PACKAGE_PREFIX} ]]; then
     depends=("${MINGW_PACKAGE_PREFIX}-openssl" "${MINGW_PACKAGE_PREFIX}-brotli")
     makedepends=("${MINGW_PACKAGE_PREFIX}-cmake" "${MINGW_PACKAGE_PREFIX}-pkgconf" 'git')
@@ -29,7 +29,7 @@ build() {
         -DBUILD_SHARED_LIBS=ON \
         -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
         -DCMAKE_INSTALL_PREFIX="${_cmake_prefix}" \
-        -DCMAKE_INSTALL_LIBDIR=usr/lib \
+        -DCMAKE_INSTALL_LIBDIR=lib \
         -DCMAKE_INSTALL_RPATH=
     cmake --build build
 }
