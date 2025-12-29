@@ -10,4 +10,4 @@ Requires: @PICOTLS_PC_REQUIRES@
 Requires.private: @PICOTLS_PC_REQUIRES_PRIVATE@
 Libs: -L${libdir} @PICOTLS_PC_LIBS@
 Libs.private: @PICOTLS_PC_LIBS_PRIVATE@
-Cflags: -I${includedir}
+Cflags: @PICOTLS_PC_CFLAGS@

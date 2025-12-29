@@ -290,7 +290,7 @@ IF (BUILD_FUZZER)
 ENDIF()
 
 if (NOT CMAKE_INSTALL_INCLUDEDIR)
-    set(CMAKE_INSTALL_INCLUDEDIR include/picotls)
+    set(CMAKE_INSTALL_INCLUDEDIR include)
 endif()
 if (NOT CMAKE_INSTALL_LIBDIR)
     set(CMAKE_INSTALL_LIBDIR lib)
@@ -300,7 +300,6 @@ install(FILES include/picotls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY include/picotls DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         PATTERN "mbedtls.h" EXCLUDE
         PATTERN "openssl.h" EXCLUDE
-        PATTERN "minicrypto.h" EXCLUDE
         PATTERN "fusion.h" EXCLUDE)
 
 install(TARGETS picotls-core
@@ -312,14 +311,13 @@ install(TARGETS picotls-minicrypto
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES include/picotls/minicrypto.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 if (TARGET picotls-fusion)
     install(TARGETS picotls-fusion
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/picotls/fusion.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES include/picotls/fusion.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/picotls)
 endif()
 
 if (TARGET picotls-openssl)
@@ -327,7 +325,7 @@ if (TARGET picotls-openssl)
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/picotls/openssl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES include/picotls/openssl.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/picotls)
 endif()
 
 if (TARGET picotls-mbedtls)
@@ -335,7 +333,7 @@ if (TARGET picotls-mbedtls)
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-    install(FILES include/picotls/mbedtls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES include/picotls/mbedtls.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/picotls)
 endif()
 
 set(PICOTLS_PKGCONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
@@ -362,6 +360,11 @@ function(install_pkgconfig name description libs requires requires_private libs_
         set(PICOTLS_PC_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
     else()
         set(PICOTLS_PC_INCLUDEDIR "\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}")
+    endif()
+    if (PICOTLS_PC_INCLUDEDIR STREQUAL "/usr/include")
+        set(PICOTLS_PC_CFLAGS "")
+    else()
+        set(PICOTLS_PC_CFLAGS "-I\${includedir}")
     endif()
     set(PICOTLS_PC_VERSION "${PICOTLS_PKGCONFIG_VERSION}")
 
