@@ -23,8 +23,10 @@
 #include "wincompat.h"
 #endif
 #include <assert.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "picotls.h"
 #include "picotls/ffx.h"
 #include "picotls/minicrypto.h"
@@ -32,6 +34,61 @@
 #include "../deps/picotest/picotest.h"
 #include "../lib/picotls.c"
 #include "test.h"
+
+static size_t buffer_alloc_calls;
+static size_t buffer_free_calls;
+static size_t buffer_alloc_last_len;
+static size_t buffer_free_last_len;
+static uint8_t buffer_alloc_last_align_bits;
+static uint8_t buffer_free_last_align_bits;
+static void *buffer_alloc_last_ptr;
+static void *buffer_free_last_ptr;
+static size_t buffer_alloc_fail_on_call;
+
+static void reset_buffer_alloc_tracking(void)
+{
+    buffer_alloc_calls = 0;
+    buffer_free_calls = 0;
+    buffer_alloc_last_len = 0;
+    buffer_free_last_len = 0;
+    buffer_alloc_last_align_bits = 0;
+    buffer_free_last_align_bits = 0;
+    buffer_alloc_last_ptr = NULL;
+    buffer_free_last_ptr = NULL;
+    buffer_alloc_fail_on_call = 0;
+}
+
+static void *test_buffer_alloc(size_t len, uint8_t align_bits)
+{
+    ++buffer_alloc_calls;
+    buffer_alloc_last_len = len;
+    buffer_alloc_last_align_bits = align_bits;
+    if (buffer_alloc_fail_on_call != 0 && buffer_alloc_calls >= buffer_alloc_fail_on_call)
+        return NULL;
+
+    size_t align = align_bits != 0 ? ((size_t)1 << align_bits) : sizeof(void *);
+    size_t alloc_size = len + align + sizeof(void *);
+    void *base = malloc(alloc_size);
+    if (base == NULL)
+        return NULL;
+    uintptr_t start = (uintptr_t)base + sizeof(void *);
+    uintptr_t aligned = (start + (align - 1)) & ~(uintptr_t)(align - 1);
+    ((void **)aligned)[-1] = base;
+    buffer_alloc_last_ptr = (void *)aligned;
+    return (void *)aligned;
+}
+
+static void test_buffer_free(void *p, size_t len, uint8_t align_bits)
+{
+    ++buffer_free_calls;
+    buffer_free_last_len = len;
+    buffer_free_last_align_bits = align_bits;
+    buffer_free_last_ptr = p;
+    if (p == NULL)
+        return;
+    void *base = ((void **)p)[-1];
+    free(base);
+}
 
 static void test_is_ipaddr(void)
 {
@@ -44,6 +101,63 @@ static void test_is_ipaddr(void)
     ok(ptls_server_name_is_ipaddr("2001:db8::2:1"));
 }
 
+static void test_buffer_alloc_basic(void)
+{
+    reset_buffer_alloc_tracking();
+    ptls_buffer_t buf;
+    uint8_t smallbuf[8];
+    ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+    ok(ptls_buffer_reserve(&buf, sizeof(smallbuf) + 1) == 0);
+    ok(buffer_alloc_calls == 1);
+    ok(buffer_alloc_last_align_bits == 0);
+    ok(buffer_alloc_last_len >= 1024);
+    ok(buf.is_allocated != 0);
+    ok(buf.base != smallbuf);
+    size_t cap = buf.capacity;
+    ptls_buffer_dispose(&buf);
+    ok(buffer_free_calls == 1);
+    ok(buffer_free_last_len == cap);
+    ok(buffer_free_last_align_bits == 0);
+    ok(buffer_free_last_ptr == buffer_alloc_last_ptr);
+}
+
+static void test_buffer_alloc_aligned(void)
+{
+    reset_buffer_alloc_tracking();
+    ptls_buffer_t buf;
+    uint8_t smallbuf[8];
+    ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+    ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6) == 0);
+    ok(buffer_alloc_calls == 1);
+    ok(buffer_alloc_last_align_bits == 6);
+    ok(((uintptr_t)buf.base & 63) == 0);
+    ok(buf.align_bits == 6);
+    size_t cap = buf.capacity;
+    ptls_buffer_dispose(&buf);
+    ok(buffer_free_calls == 1);
+    ok(buffer_free_last_len == cap);
+    ok(buffer_free_last_align_bits == 6);
+}
+
+static void test_buffer_alloc_failure(void)
+{
+    reset_buffer_alloc_tracking();
+    buffer_alloc_fail_on_call = 1;
+    ptls_buffer_t buf;
+    uint8_t smallbuf[8];
+    ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+    size_t cap = buf.capacity;
+    size_t off = buf.off;
+    uint8_t *base = buf.base;
+    ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6) == PTLS_ERROR_NO_MEMORY);
+    ok(buf.base == base);
+    ok(buf.capacity == cap);
+    ok(buf.off == off);
+    ok(buf.is_allocated == 0);
+    ok(buffer_free_calls == 0);
+    ptls_buffer_dispose(&buf);
+}
+
 static void test_extension_bitmap(void)
 {
     struct st_ptls_extension_bitmap_t bitmap = {0};
@@ -54,6 +168,22 @@ static void test_extension_bitmap(void)
     /* allowed extension is accepted first, rejected upon repetition */
     ok(extension_bitmap_testandset(&bitmap, PTLS_HANDSHAKE_TYPE_SERVER_HELLO, PTLS_EXTENSION_TYPE_KEY_SHARE));
     ok(!extension_bitmap_testandset(&bitmap, PTLS_HANDSHAKE_TYPE_SERVER_HELLO, PTLS_EXTENSION_TYPE_KEY_SHARE));
+}
+
+static void test_buffer_alloc_overrides(void)
+{
+    void *(*saved_alloc)(size_t, uint8_t) = ptls_buffer_alloc;
+    void (*saved_free)(void *, size_t, uint8_t) = ptls_buffer_free;
+
+    ptls_buffer_alloc = test_buffer_alloc;
+    ptls_buffer_free = test_buffer_free;
+
+    subtest("basic-alloc-free", test_buffer_alloc_basic);
+    subtest("aligned-alloc", test_buffer_alloc_aligned);
+    subtest("alloc-failure", test_buffer_alloc_failure);
+
+    ptls_buffer_alloc = saved_alloc;
+    ptls_buffer_free = saved_free;
 }
 
 static void test_select_cipher(void)
@@ -2460,6 +2590,7 @@ void test_picotls(void)
     subtest("chacha20", test_chacha20);
     subtest("ffx", test_ffx);
     subtest("base64-decode", test_base64_decode);
+    subtest("buffer-alloc-hooks", test_buffer_alloc_overrides);
     subtest("tls-block8", test_tlsblock8);
     subtest("tls-block16", test_tlsblock16);
     subtest("ech", test_ech);

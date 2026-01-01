@@ -563,21 +563,45 @@ static char *duplicate_as_str(const void *src, size_t len)
     return dst;
 }
 
+static void buffer_free(void *p, size_t len, uint8_t align_bits)
+{
+#ifdef _WIN32
+    if (align_bits != 0) {
+	_aligned_free(p);
+    } else {
+	free(p);
+    }
+#else
+    free(p);
+#endif
+}
+
+void (*ptls_buffer_free)(void *p, size_t len, uint8_t align_bits) = buffer_free;
+
 void ptls_buffer__release_memory(ptls_buffer_t *buf)
 {
     ptls_clear_memory(buf->base, buf->off);
-    if (buf->is_allocated) {
+    if (buf->is_allocated)
+	ptls_buffer_free(buf->base, buf->capacity, buf->align_bits);
+}
+
+static void *buffer_alloc(size_t len, uint8_t align_bits)
+{
+    if (align_bits != 0) {
 #ifdef _WIN32
-        if (buf->align_bits != 0) {
-            _aligned_free(buf->base);
-        } else {
-            free(buf->base);
-        }
+	return _aligned_malloc(len, (size_t)1 << align_bits);
 #else
-        free(buf->base);
+        void *newp;
+	if (posix_memalign(&newp, 1 << align_bits, len) != 0)
+	    return NULL;
+	return newp;
 #endif
+    } else {
+	return malloc(len);
     }
 }
+
+void *(*ptls_buffer_alloc)(size_t len, uint8_t align_bits) = buffer_alloc;
 
 int ptls_buffer_reserve(ptls_buffer_t *buf, size_t delta)
 {
@@ -598,18 +622,8 @@ int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, size_t delta, uint8_t align_
         while (new_capacity < buf->off + delta) {
             new_capacity *= 2;
         }
-        if (align_bits != 0) {
-#ifdef _WIN32
-            if ((newp = _aligned_malloc(new_capacity, (size_t)1 << align_bits)) == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-#else
-            if (posix_memalign(&newp, 1 << align_bits, new_capacity) != 0)
-                return PTLS_ERROR_NO_MEMORY;
-#endif
-        } else {
-            if ((newp = malloc(new_capacity)) == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-        }
+	if ((newp = ptls_buffer_alloc(new_capacity, align_bits)) == NULL)
+	    return PTLS_ERROR_NO_MEMORY;
         memcpy(newp, buf->base, buf->off);
         ptls_buffer__release_memory(buf);
         buf->base = newp;

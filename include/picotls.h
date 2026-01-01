@@ -1908,6 +1908,21 @@ static void ptls_aead__do_encrypt_v(ptls_aead_context_t *ctx, void *_output, ptl
  */
 void ptls__key_schedule_update_hash(ptls_key_schedule_t *sched, const uint8_t *msg, size_t msglen, int use_outer);
 /**
+ * allocate memory for buffer
+ * - this can only be overridden early in program initialization together
+ *   with a paired ptls_buffer_free
+ * - all implementations must respect align_bits
+ * - returns NULL on failure
+ */
+extern void *(*ptls_buffer_alloc)(size_t len, uint8_t align_bits);
+/**
+ * free memory for buffer
+ * - this can only be overridden early in program initialization together
+ *   with a paired ptls_buffer_alloc
+ * - returns NULL on failure
+ */
+extern void (*ptls_buffer_free)(void *p, size_t len, uint8_t align_bits);
+/**
  * clears memory
  */
 extern void (*volatile ptls_clear_memory)(void *p, size_t len);
