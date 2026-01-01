@@ -1911,10 +1911,14 @@ void ptls__key_schedule_update_hash(ptls_key_schedule_t *sched, const uint8_t *m
  * allocate memory for buffer
  * - this can only be overridden early in program initialization together
  *   with a paired ptls_buffer_free
+ * - exclusively used to grow existing buffers
+ *   - the current data pointer is passed in orig
+ *   - the implementation should NOT copy existing data or free the current buffer
+ *   - any necessary copying or freeing is performed by the caller
  * - all implementations must respect align_bits
  * - returns NULL on failure
  */
-extern void *(*ptls_buffer_alloc)(size_t len, uint8_t align_bits);
+extern void *(*ptls_buffer_alloc)(void *orig, size_t len, uint8_t align_bits);
 /**
  * free memory for buffer
  * - this can only be overridden early in program initialization together

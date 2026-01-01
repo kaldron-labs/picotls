@@ -585,7 +585,7 @@ void ptls_buffer__release_memory(ptls_buffer_t *buf)
 	ptls_buffer_free(buf->base, buf->capacity, buf->align_bits);
 }
 
-static void *buffer_alloc(size_t len, uint8_t align_bits)
+static void *buffer_alloc(void *orig, size_t len, uint8_t align_bits)
 {
     if (align_bits != 0) {
 #ifdef _WIN32
@@ -601,7 +601,7 @@ static void *buffer_alloc(size_t len, uint8_t align_bits)
     }
 }
 
-void *(*ptls_buffer_alloc)(size_t len, uint8_t align_bits) = buffer_alloc;
+void *(*ptls_buffer_alloc)(void *orig, size_t len, uint8_t align_bits) = buffer_alloc;
 
 int ptls_buffer_reserve(ptls_buffer_t *buf, size_t delta)
 {
@@ -622,7 +622,7 @@ int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, size_t delta, uint8_t align_
         while (new_capacity < buf->off + delta) {
             new_capacity *= 2;
         }
-	if ((newp = ptls_buffer_alloc(new_capacity, align_bits)) == NULL)
+	if ((newp = ptls_buffer_alloc(buf->base, new_capacity, align_bits)) == NULL)
 	    return PTLS_ERROR_NO_MEMORY;
         memcpy(newp, buf->base, buf->off);
         ptls_buffer__release_memory(buf);
