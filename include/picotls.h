@@ -350,8 +350,9 @@ typedef struct st_ptls_iovec_t {
  */
 typedef struct st_ptls_buffer_t {
     uint8_t *base;
-    size_t capacity;
-    size_t off;
+    void *origin;         /* origin, NULL for internal, used to distinguish application buffer from internal */
+    uint32_t capacity;
+    uint32_t off;
     uint8_t is_allocated; /* boolean */
     uint8_t align_bits;   /* if particular alignment is required, set to log2(alignment); otherwize zero */
 } ptls_buffer_t;
@@ -1192,7 +1193,7 @@ static ptls_iovec_t ptls_iovec_init(const void *p, size_t len);
 /**
  * initializes a buffer, setting the default destination to the small buffer provided as the argument.
  */
-static void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size);
+static void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size);
 /**
  * disposes a buffer, freeing resources allocated by the buffer itself (if any)
  */
@@ -1909,23 +1910,49 @@ static void ptls_aead__do_encrypt_v(ptls_aead_context_t *ctx, void *_output, ptl
 void ptls__key_schedule_update_hash(ptls_key_schedule_t *sched, const uint8_t *msg, size_t msglen, int use_outer);
 /**
  * allocate memory for buffer
- * - this can only be overridden early in program initialization together
- *   with a paired ptls_buffer_free
+ * - this can only be overridden early in program initialization
+ * - any override must be accompanied by a paired ptls_buffer_free() implementation
  * - exclusively used to grow existing buffers
- *   - the current data pointer is passed in orig
- *   - the implementation should NOT copy existing data or free the current buffer
- *   - any necessary copying or freeing is performed by the caller
+ * - the implementation contract is as follows:
+ *   - the current base pointer is passed in buf->base
+ *   - the implementation should allocate a new buffer >= capacity
+ *   - existing data {buf->base, buf->off} should be copied to the new buffer
+ *   - existing data should be cleared following copying
+ *     by calling ptls_clear_memory(buf->base, buf->off), unless that is also
+ *     overridden to be a function that does nothing
+ *   - if buf->is_allocated is true, buf->base was previously allocated during
+ *     buffer growth by ptls_buffer_alloc() and should therefore presumably
+ *     be freed by the overridden ptls_buffer_free() following the copy/clear
+ *   - if buf->is_allocated is false, buf->base will be the smallbuf
+ *     originally passed to ptls_buffer_init(); if this is not on the stack
+ *     this should be appropriately freed following the copy/clear
+ *   - buf->origin can be used to distinguish application-originated buffers
+ *     from internal buffers (buf->origin is always NULL for internal buffers, other
+ *     values are left to the application)
+ *   - if unsuccessful, NULL is returned
+ *   - if successful:
+ *     - buf->base = newly allocated base
+ *     - buf->capacity = new_capacity
+ *     - buf->is_allocated = 1
+ *     - buf->align_bits = align_bits
+ *     - ... and the new buf->base is returned
  * - all implementations must respect align_bits
  * - returns NULL on failure
  */
-extern void *(*ptls_buffer_alloc)(void *orig, size_t len, uint8_t align_bits);
+extern void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits);
 /**
  * free memory for buffer
- * - this can only be overridden early in program initialization together
- *   with a paired ptls_buffer_alloc
+ * - this can only be overridden early in program initialization
+ * - any override must be accompanied by a paired ptls_buffer_alloc() implementation
+ * - this is only called for is_allocated buffers that were
+ *   previously grown by ptls_buffer_alloc(); if the smallbuf passed to
+ *   ptls_buffer_init() requires freeing following a ptls_buffer_dispose(),
+ *   that is the caller's responsibility
+ * - buf->origin can be used to distinguish application-originated buffers
+ *   from internal buffers (see pts_buffer_alloc comment above)
  * - returns NULL on failure
  */
-extern void (*ptls_buffer_free)(void *p, size_t len, uint8_t align_bits);
+extern void (*ptls_buffer_free)(ptls_buffer_t *buf);
 /**
  * clears memory
  */
@@ -2027,12 +2054,13 @@ inline ptls_iovec_t ptls_iovec_init(const void *p, size_t len)
     return r;
 }
 
-inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf_size)
+inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, uint32_t smallbuf_size)
 {
     assert(smallbuf != NULL);
     buf->base = (uint8_t *)smallbuf;
-    buf->off = 0;
+    buf->origin = NULL;
     buf->capacity = smallbuf_size;
+    buf->off = 0;
     buf->is_allocated = 0;
     buf->align_bits = 0;
 }
@@ -2040,7 +2068,7 @@ inline void ptls_buffer_init(ptls_buffer_t *buf, void *smallbuf, size_t smallbuf
 inline void ptls_buffer_dispose(ptls_buffer_t *buf)
 {
     ptls_buffer__release_memory(buf);
-    *buf = (ptls_buffer_t){NULL, 0, 0, 0, 0};
+    *buf = (ptls_buffer_t){NULL, NULL, 0, 0, 0, 0};
 }
 
 inline uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v)
