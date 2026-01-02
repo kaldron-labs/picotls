@@ -41,6 +41,7 @@ static size_t buffer_alloc_last_len;
 static size_t buffer_free_last_len;
 static uint8_t buffer_alloc_last_align_bits;
 static uint8_t buffer_free_last_align_bits;
+static void *buffer_alloc_last_orig;
 static void *buffer_alloc_last_ptr;
 static void *buffer_free_last_ptr;
 static size_t buffer_alloc_fail_on_call;
@@ -53,40 +54,51 @@ static void reset_buffer_alloc_tracking(void)
     buffer_free_last_len = 0;
     buffer_alloc_last_align_bits = 0;
     buffer_free_last_align_bits = 0;
+    buffer_alloc_last_orig = NULL;
     buffer_alloc_last_ptr = NULL;
     buffer_free_last_ptr = NULL;
     buffer_alloc_fail_on_call = 0;
 }
 
-static void *test_buffer_alloc(size_t len, uint8_t align_bits)
+static void test_buffer_free(ptls_buffer_t *buf);
+
+static void *test_buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t align_bits)
 {
     ++buffer_alloc_calls;
-    buffer_alloc_last_len = len;
+    buffer_alloc_last_len = new_capacity;
     buffer_alloc_last_align_bits = align_bits;
+    buffer_alloc_last_orig = buf->base;
     if (buffer_alloc_fail_on_call != 0 && buffer_alloc_calls >= buffer_alloc_fail_on_call)
         return NULL;
-
     size_t align = align_bits != 0 ? ((size_t)1 << align_bits) : sizeof(void *);
-    size_t alloc_size = len + align + sizeof(void *);
+    size_t alloc_size = new_capacity + align + sizeof(void *);
     void *base = malloc(alloc_size);
     if (base == NULL)
         return NULL;
     uintptr_t start = (uintptr_t)base + sizeof(void *);
     uintptr_t aligned = (start + (align - 1)) & ~(uintptr_t)(align - 1);
     ((void **)aligned)[-1] = base;
+    if (buf->off) memcpy((void *)aligned, buf->base, buf->off);
+    ptls_clear_memory(buf->base, buf->off);
+    if (buf->is_allocated)
+        test_buffer_free(buf);
+    buf->base = (void *)aligned;
+    buf->capacity = new_capacity;
+    buf->is_allocated = 1;
+    buf->align_bits = align_bits;
     buffer_alloc_last_ptr = (void *)aligned;
     return (void *)aligned;
 }
 
-static void test_buffer_free(void *p, size_t len, uint8_t align_bits)
+static void test_buffer_free(ptls_buffer_t *buf)
 {
     ++buffer_free_calls;
-    buffer_free_last_len = len;
-    buffer_free_last_align_bits = align_bits;
-    buffer_free_last_ptr = p;
-    if (p == NULL)
+    buffer_free_last_len = buf->capacity;
+    buffer_free_last_align_bits = buf->align_bits;
+    buffer_free_last_ptr = buf->base;
+    if (buf->base == NULL)
         return;
-    void *base = ((void **)p)[-1];
+    void *base = ((void **)buf->base)[-1];
     free(base);
 }
 
@@ -107,10 +119,12 @@ static void test_buffer_alloc_basic(void)
     ptls_buffer_t buf;
     uint8_t smallbuf[8];
     ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+    uint8_t *base = buf.base;
     ok(ptls_buffer_reserve(&buf, sizeof(smallbuf) + 1) == 0);
     ok(buffer_alloc_calls == 1);
     ok(buffer_alloc_last_align_bits == 0);
     ok(buffer_alloc_last_len >= 1024);
+    ok(buffer_alloc_last_orig == base);
     ok(buf.is_allocated != 0);
     ok(buf.base != smallbuf);
     size_t cap = buf.capacity;
@@ -150,6 +164,7 @@ static void test_buffer_alloc_failure(void)
     size_t off = buf.off;
     uint8_t *base = buf.base;
     ok(ptls_buffer_reserve_aligned(&buf, sizeof(smallbuf) + 1, 6) == PTLS_ERROR_NO_MEMORY);
+    ok(buffer_alloc_last_orig == base);
     ok(buf.base == base);
     ok(buf.capacity == cap);
     ok(buf.off == off);
@@ -172,8 +187,8 @@ static void test_extension_bitmap(void)
 
 static void test_buffer_alloc_overrides(void)
 {
-    void *(*saved_alloc)(size_t, uint8_t) = ptls_buffer_alloc;
-    void (*saved_free)(void *, size_t, uint8_t) = ptls_buffer_free;
+    void *(*saved_alloc)(ptls_buffer_t *, uint32_t, uint8_t) = ptls_buffer_alloc;
+    void (*saved_free)(ptls_buffer_t *) = ptls_buffer_free;
 
     ptls_buffer_alloc = test_buffer_alloc;
     ptls_buffer_free = test_buffer_free;
