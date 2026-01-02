@@ -3,7 +3,7 @@
 options=(!strip debug)
 
 pkgname=picotls
-pkgver=1.0
+pkgver=1.1
 pkgrel=1
 pkgdesc='picotls'
 url='https://github.com/kaldron-labs/picotls'
