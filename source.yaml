@@ -1,0 +1,5 @@
+files:
+  - deps/**/*.{h,c}
+  - include/**/*.{h,c}
+  - lib/**/*.{h,c}
+  - t/**/*.{h,c}
