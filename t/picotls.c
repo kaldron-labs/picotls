@@ -2393,7 +2393,7 @@ static void test_quicblock(void)
 
     ptls_buffer_init(&buf, "", 0);
 
-    ptls_buffer_push_block(&buf, -1, { ptls_buffer_pushv(&buf, "abc", 3); });
+    ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, "abc", 3); });
     src = buf.base;
     end = buf.base + buf.off;
     ptls_decode_block(src, end, -1, {
@@ -2403,7 +2403,7 @@ static void test_quicblock(void)
     });
 
     buf.off = 0;
-    ptls_buffer_push_block(&buf, -1, {
+    ptls_buffer_push_block(&buf, 1, {
         if ((ret = ptls_buffer_reserve(&buf, 123)) != 0)
             goto Exit;
         memset(buf.base + buf.off, 0x55, 123);

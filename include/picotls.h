@@ -1217,10 +1217,6 @@ int ptls_buffer__do_pushv(ptls_buffer_t *buf, const void *src, size_t len);
 /**
  * internal
  */
-int ptls_buffer__adjust_quic_blocksize(ptls_buffer_t *buf, size_t body_size);
-/**
- * internal
- */
 int ptls_buffer__adjust_asn1_blocksize(ptls_buffer_t *buf, size_t body_size);
 /**
  * pushes an unsigned bigint
@@ -1283,23 +1279,18 @@ static uint8_t *ptls_encode_quicint(uint8_t *p, uint64_t v);
 #define ptls_buffer_push_block(buf, _capacity, block)                                                                              \
     do {                                                                                                                           \
         size_t capacity = (_capacity);                                                                                             \
-        ptls_buffer_pushv((buf), (uint8_t *)"\0\0\0\0\0\0\0", capacity != -1 ? capacity : 1);                                      \
+        ptls_buffer_pushv((buf), (uint8_t *)"\0\0\0\0\0\0\0", capacity);                                      \
         size_t body_start = (buf)->off;                                                                                            \
         do {                                                                                                                       \
             block                                                                                                                  \
         } while (0);                                                                                                               \
         size_t body_size = (buf)->off - body_start;                                                                                \
-        if (capacity != -1) {                                                                                                      \
-            if (capacity < sizeof(size_t) && body_size >= (size_t)1 << (capacity * 8)) {                                           \
-                ret = PTLS_ERROR_BLOCK_OVERFLOW;                                                                                   \
-                goto Exit;                                                                                                         \
-            }                                                                                                                      \
-            for (; capacity != 0; --capacity)                                                                                      \
-                (buf)->base[body_start - capacity] = (uint8_t)(body_size >> (8 * (capacity - 1)));                                 \
-        } else {                                                                                                                   \
-            if ((ret = ptls_buffer__adjust_quic_blocksize((buf), body_size)) != 0)                                                 \
-                goto Exit;                                                                                                         \
+        if (capacity < sizeof(size_t) && body_size >= (size_t)1 << (capacity * 8)) {                                               \
+            ret = PTLS_ERROR_BLOCK_OVERFLOW;                                                                                       \
+            goto Exit;                                                                                                             \
         }                                                                                                                          \
+        for (; capacity != 0; --capacity)                                                                                          \
+            (buf)->base[body_start - capacity] = (uint8_t)(body_size >> (8 * (capacity - 1)));                                     \
     } while (0)
 
 #define ptls_buffer_push_asn1_block(buf, block)                                                                                    \
