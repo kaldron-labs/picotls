@@ -4,7 +4,7 @@ options=(!strip debug)
 
 pkgname=picotls
 pkgver=1.0
-pkgrel=1
+pkgrel=2
 pkgdesc='picotls'
 url='https://github.com/kaldron-labs/picotls'
 license=('MIT')
