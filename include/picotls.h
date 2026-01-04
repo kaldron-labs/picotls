@@ -1205,11 +1205,11 @@ void ptls_buffer__release_memory(ptls_buffer_t *buf);
 /**
  * reserves space for additional amount of memory
  */
-int ptls_buffer_reserve(ptls_buffer_t *buf, size_t delta);
+int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta);
 /**
  * reserves space for additional amount of memory, requiring `buf->base` to follow specified alignment
  */
-int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, size_t delta, uint8_t align_bits);
+int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits);
 /**
  * internal
  */

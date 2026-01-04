@@ -612,12 +612,12 @@ static void *buffer_alloc(ptls_buffer_t *buf, uint32_t new_capacity, uint8_t ali
 
 void *(*ptls_buffer_alloc)(ptls_buffer_t *buf, uint32_t capacity, uint8_t align_bits) = buffer_alloc;
 
-int ptls_buffer_reserve(ptls_buffer_t *buf, size_t delta)
+int ptls_buffer_reserve(ptls_buffer_t *buf, uint32_t delta)
 {
     return ptls_buffer_reserve_aligned(buf, delta, 0);
 }
 
-int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, size_t delta, uint8_t align_bits)
+int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, uint32_t delta, uint8_t align_bits)
 {
     if (buf->base == NULL)
         return PTLS_ERROR_NO_MEMORY;
@@ -625,12 +625,26 @@ int ptls_buffer_reserve_aligned(ptls_buffer_t *buf, size_t delta, uint8_t align_
     if (PTLS_MEMORY_DEBUG || buf->capacity < buf->off + delta ||
         (buf->align_bits < align_bits && ((uintptr_t)buf->base & (((uintptr_t)1 << align_bits) - 1)) != 0)) {
         void *newp;
-        size_t new_capacity = buf->capacity;
+        uint32_t new_capacity = buf->capacity;
         if (new_capacity < 1024)
             new_capacity = 1024;
+#ifdef __GNUC__
+        {
+            uint32_t new_length = buf->off + delta;
+            if (new_capacity < new_length) {
+                int shift = (int)__builtin_clz(new_capacity) - (int)__builtin_clz(new_length);
+                // shift cannot be negative here due to the following pre-conditions:
+                // - new_capacity >= 1024
+                // - new_length >= new_capacity
+                new_capacity <<= shift;
+                if (new_capacity < new_length) new_capacity <<= 1;
+            }
+        }
+#else
         while (new_capacity < buf->off + delta) {
             new_capacity *= 2;
         }
+#endif
         if ((newp = ptls_buffer_alloc(buf, new_capacity, align_bits)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
     }
