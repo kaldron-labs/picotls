@@ -265,21 +265,66 @@ static int ptls_compare_separator_line(const char *line, const char *begin_or_en
     return ret;
 }
 
-static int ptls_get_pem_object(FILE *F, const char *label, ptls_buffer_t *buf)
+static int ptls_pem_buffer_init_capacity(ptls_buffer_t *buf, size_t capacity)
+{
+    void *base;
+
+    if (capacity == 0)
+        capacity = 1;
+
+    if ((base = malloc(capacity)) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    ptls_buffer_init_tx(buf, base, capacity);
+    return 0;
+}
+
+static int ptls_get_pem_object_capacity(FILE *F, const char *label, long object_start, size_t *capacity)
+{
+    char line[256];
+    int ret = PTLS_ERROR_PEM_LABEL_NOT_FOUND;
+
+    *capacity = 0;
+    while (fgets(line, sizeof(line), F)) {
+        if (ptls_compare_separator_line(line, "END", label) == 0) {
+            ret = 0;
+            break;
+        }
+        if (strlen(line) > SIZE_MAX - *capacity)
+            return PTLS_ERROR_NO_MEMORY;
+        *capacity += strlen(line);
+    }
+    if (ret == 0 && fseek(F, object_start, SEEK_SET) != 0)
+        ret = -1;
+    return ret;
+}
+
+static int ptls_get_pem_object_malloc(FILE *F, const char *label, ptls_iovec_t *object)
 {
     int ret = PTLS_ERROR_PEM_LABEL_NOT_FOUND;
     char line[256];
     ptls_base64_decode_state_t state;
+    ptls_buffer_t buf = {0};
+
+    object->base = NULL;
+    object->len = 0;
 
     /* Get the label on a line by itself */
     while (fgets(line, 256, F)) {
         if (ptls_compare_separator_line(line, "BEGIN", label) == 0) {
-            ret = 0;
+            long object_start;
+            size_t capacity;
+
+            if ((object_start = ftell(F)) < 0)
+                return -1;
+            if ((ret = ptls_get_pem_object_capacity(F, label, object_start, &capacity)) != 0)
+                return ret;
+            if ((ret = ptls_pem_buffer_init_capacity(&buf, capacity)) != 0)
+                return ret;
             ptls_base64_decode_init(&state);
             break;
         }
     }
-    /* Get the data in the buffer */
+    /* Decode directly into malloc-owned PEM object storage. */
     while (ret == 0 && fgets(line, 256, F)) {
         if (ptls_compare_separator_line(line, "END", label) == 0) {
             if (state.status == PTLS_BASE64_DECODE_DONE || (state.status == PTLS_BASE64_DECODE_IN_PROGRESS && state.nbc == 0)) {
@@ -289,8 +334,16 @@ static int ptls_get_pem_object(FILE *F, const char *label, ptls_buffer_t *buf)
             }
             break;
         } else {
-            ret = ptls_base64_decode(line, &state, buf);
+            ret = ptls_base64_decode(line, &state, &buf);
         }
+    }
+
+    if (ret == 0 && buf.off > 0) {
+        object->base = buf.base;
+        object->len = buf.off;
+    } else {
+        ptls_clear_memory(buf.base, buf.off);
+        free(buf.base);
     }
 
     return ret;
@@ -317,22 +370,15 @@ int ptls_load_pem_objects(char const *pem_fname, const char *label, ptls_iovec_t
 
     if (ret == 0) {
         while (count < list_max) {
-            ptls_buffer_t buf;
+            ptls_iovec_t object;
 
-            ptls_buffer_init_tx(&buf, "", 0);
-
-            ret = ptls_get_pem_object(F, label, &buf);
-
+            ret = ptls_get_pem_object_malloc(F, label, &object);
             if (ret == 0) {
-                if (buf.off > 0 && buf.is_allocated) {
-                    list[count].base = buf.base;
-                    list[count].len = buf.off;
+                if (object.base != NULL) {
+                    list[count] = object;
                     count++;
-                } else {
-                    ptls_buffer_dispose(&buf);
                 }
             } else {
-                ptls_buffer_dispose(&buf);
                 break;
             }
         }
