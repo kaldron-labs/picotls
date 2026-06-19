@@ -30,7 +30,8 @@ build() {
         -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
         -DCMAKE_INSTALL_PREFIX="${_cmake_prefix}" \
         -DCMAKE_INSTALL_LIBDIR=lib \
-        -DCMAKE_INSTALL_RPATH=
+        -DCMAKE_INSTALL_RPATH= \
+        -DWITH_GPROF="${WITH_GPROF:-OFF}"
     cmake --build build
 }
 

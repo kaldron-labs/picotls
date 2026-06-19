@@ -22,16 +22,25 @@ CHECK_FUSION_PREREQUISITES()
 
 OPTION(WITH_DTRACE "use USDT (userspace Dtrace probes)" ${HAVE_DTRACE})
 OPTION(WITH_FUSION "build 'fusion' AES-GCM engine" ${WITH_FUSION_DEFAULT})
+OPTION(WITH_GPROF "build with gprof instrumentation (-pg)" OFF)
 IF (WITH_DTRACE)
     MESSAGE(STATUS "Enabling USDT support")
 ENDIF ()
 IF (WITH_FUSION)
     MESSAGE(STATUS "Enabling 'fusion' AES-GCM engine")
 ENDIF ()
+IF (WITH_GPROF)
+    MESSAGE(STATUS "Enabling gprof instrumentation")
+ENDIF ()
 OPTION(WITH_AEGIS "enable AEGIS (requires libaegis)" ${WITH_AEGIS})
 OPTION(WITH_MBEDTLS "enable MBEDTLS" ${WITH_MBEDTLS})
 
 SET(CMAKE_C_FLAGS "-std=c99 -Wall -O2 -g ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
+IF (WITH_GPROF)
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pg")
+    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pg")
+    SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -pg")
+ENDIF ()
 INCLUDE_DIRECTORIES(
     deps/cifra/src/ext
     deps/cifra/src
