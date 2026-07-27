@@ -1,10 +1,10 @@
 # local development PKGBUILD - not intended for package repositories
 
-options=(!strip debug)
+options=(strip !debug)
 
 pkgname=zpicotls
 pkgver=1.6
-pkgrel=1
+pkgrel=2
 pkgdesc='zpicotls'
 url='https://github.com/kaldron-labs/zpicotls'
 license=('MIT')
@@ -27,6 +27,7 @@ build() {
     cd "$startdir"
     cmake -S . -B build \
         -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON \
         -DCMAKE_INSTALL_PREFIX="${_cmake_prefix}" \
         -DCMAKE_INSTALL_LIBDIR=lib \
