@@ -290,6 +290,9 @@ struct st_ptls_t {
     unsigned send_change_cipher_spec : 1;
     unsigned needs_key_update : 1;
     unsigned key_update_send_request : 1;
+    unsigned tx_detached : 1;
+    uint16_t detached_tx_protocol_version;
+    uint32_t key_update_requests;
 #if PTLS_HAVE_LOG
     /**
      * see ptls_log
@@ -337,6 +340,11 @@ struct st_ptls_t {
      * user data
      */
     void *data_ptr;
+};
+
+struct st_ptls_tx_t {
+    /* Only the outbound and immutable identity fields of this logging facade are initialized. */
+    ptls_t tls;
 };
 
 struct st_ptls_record_t {
@@ -5114,7 +5122,13 @@ static int handle_key_update(ptls_t *tls, ptls_message_emitter_t *emitter, ptls_
     if (*src) {
         if (tls->ctx->update_traffic_key != NULL)
             return PTLS_ALERT_UNEXPECTED_MESSAGE;
-        tls->needs_key_update = 1;
+        if (tls->tx_detached) {
+            if (tls->key_update_requests == UINT32_MAX)
+                return PTLS_ALERT_INTERNAL_ERROR;
+            ++tls->key_update_requests;
+        } else {
+            tls->needs_key_update = 1;
+        }
     }
 
     return 0;
@@ -5375,6 +5389,10 @@ int ptls_export(ptls_t *tls, ptls_buffer_t *output)
     if ((ret = buffer_require_direction(output, 1)) != 0)
         return ret;
 
+    if (tls->tx_detached) {
+        ret = PTLS_ERROR_NOT_AVAILABLE;
+        goto Exit;
+    }
     if (tls->state != PTLS_STATE_SERVER_POST_HANDSHAKE) {
         ret = PTLS_ERROR_LIBRARY;
         goto Exit;
@@ -5613,6 +5631,8 @@ ptls_cipher_suite_t *ptls_get_cipher(ptls_t *tls)
 
 uint16_t ptls_get_protocol_version(ptls_t *tls)
 {
+    if (tls->tx_detached)
+        return tls->detached_tx_protocol_version;
     if (tls->traffic_protection.enc.tls12)
         return PTLS_PROTOCOL_VERSION_TLS12;
 
@@ -5623,6 +5643,9 @@ int ptls_get_traffic_keys(ptls_t *tls, int is_enc, uint8_t *key, uint8_t *iv, ui
 {
     struct st_ptls_traffic_protection_t *ctx = is_enc ? &tls->traffic_protection.enc : &tls->traffic_protection.dec;
     int ret;
+
+    if (is_enc && tls->tx_detached)
+        return PTLS_ERROR_NOT_AVAILABLE;
 
     if ((ret = get_traffic_keys(tls->cipher_suite->aead, tls->cipher_suite->hash, key, iv, ctx->secret, ptls_iovec_init(NULL, 0),
                                 NULL)) != 0)
@@ -6237,10 +6260,137 @@ Exit:
     return ret;
 }
 
+static void dispose_detached_tx(ptls_tx_t *tx)
+{
+    if (tx == NULL)
+        return;
+    if (tx->tls.key_schedule != NULL)
+        key_schedule_free(tx->tls.key_schedule);
+    if (tx->tls.traffic_protection.enc.aead != NULL)
+        ptls_aead_free(tx->tls.traffic_protection.enc.aead);
+    free(tx->tls.server_name);
+    free(tx->tls.negotiated_protocol);
+    ptls_clear_memory(tx, sizeof(*tx));
+    free(tx);
+}
+
+int ptls_detach_tx(ptls_t *tls, ptls_tx_t **tx)
+{
+    ptls_tx_t *detached = NULL;
+    int ret = 0;
+
+    if (tx == NULL)
+        return PTLS_ERROR_LIBRARY;
+    *tx = NULL;
+    if (tls == NULL || tls->tx_detached || tls->ctx->update_traffic_key != NULL ||
+        (tls->state != PTLS_STATE_CLIENT_POST_HANDSHAKE && tls->state != PTLS_STATE_SERVER_POST_HANDSHAKE) ||
+        tls->traffic_protection.enc.aead == NULL)
+        return PTLS_ERROR_NOT_AVAILABLE;
+    if ((detached = calloc(1, sizeof(*detached))) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+
+    detached->tls.ctx = tls->ctx;
+    detached->tls.state = tls->state;
+    detached->tls.cipher_suite = tls->cipher_suite;
+    memcpy(detached->tls.client_random, tls->client_random, sizeof(detached->tls.client_random));
+    detached->tls.is_server = tls->is_server;
+    detached->tls.is_psk_handshake = tls->is_psk_handshake;
+    detached->tls.needs_key_update = tls->needs_key_update;
+    detached->tls.key_update_send_request = tls->key_update_send_request;
+    detached->tls.data_ptr = tls->data_ptr;
+    detached->tls.log_sni = tls->log_sni;
+#if PTLS_HAVE_LOG
+    detached->tls.log_state = tls->log_state;
+#endif
+    if (tls->server_name != NULL &&
+        (detached->tls.server_name = duplicate_as_str(tls->server_name, strlen(tls->server_name))) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+    if (tls->negotiated_protocol != NULL && (detached->tls.negotiated_protocol = duplicate_as_str(
+                                                 tls->negotiated_protocol, strlen(tls->negotiated_protocol))) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+    if (!tls->traffic_protection.enc.tls12 && (detached->tls.key_schedule = key_schedule_new(tls->cipher_suite, NULL, 0)) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+
+    detached->tls.traffic_protection.enc = tls->traffic_protection.enc;
+    tls->detached_tx_protocol_version =
+        detached->tls.traffic_protection.enc.tls12 ? PTLS_PROTOCOL_VERSION_TLS12 : PTLS_PROTOCOL_VERSION_TLS13;
+    memset(&tls->traffic_protection.enc, 0, sizeof(tls->traffic_protection.enc));
+    tls->needs_key_update = 0;
+    tls->key_update_send_request = 0;
+    tls->tx_detached = 1;
+    *tx = detached;
+    detached = NULL;
+
+Exit:
+    dispose_detached_tx(detached);
+    return ret;
+}
+
+void ptls_tx_free(ptls_tx_t *tx)
+{
+    dispose_detached_tx(tx);
+}
+
+int ptls_tx_send(ptls_tx_t *tx, ptls_buffer_t *sendbuf, const void *input, size_t inlen)
+{
+    if (tx == NULL)
+        return PTLS_ERROR_NOT_AVAILABLE;
+    return ptls_send(&tx->tls, sendbuf, input, inlen);
+}
+
+int ptls_tx_update_key(ptls_tx_t *tx, ptls_buffer_t *sendbuf, int request_update)
+{
+    int ret;
+
+    if (tx == NULL || tx->tls.key_schedule == NULL)
+        return PTLS_ERROR_NOT_AVAILABLE;
+    if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
+        return ret;
+    return update_send_key(&tx->tls, sendbuf, request_update);
+}
+
+int ptls_tx_send_alert(ptls_tx_t *tx, ptls_buffer_t *sendbuf, uint8_t level, uint8_t description)
+{
+    if (tx == NULL)
+        return PTLS_ERROR_NOT_AVAILABLE;
+    return ptls_send_alert(&tx->tls, sendbuf, level, description);
+}
+
+ptls_cipher_suite_t *ptls_tx_get_cipher(ptls_tx_t *tx)
+{
+    return tx != NULL ? tx->tls.cipher_suite : NULL;
+}
+
+uint16_t ptls_tx_get_protocol_version(ptls_tx_t *tx)
+{
+    return tx != NULL ? ptls_get_protocol_version(&tx->tls) : 0;
+}
+
+size_t ptls_tx_get_record_overhead(ptls_tx_t *tx)
+{
+    return tx != NULL ? ptls_get_record_overhead(&tx->tls) : 0;
+}
+
+int ptls_take_key_update_request(ptls_t *tls)
+{
+    if (tls == NULL || tls->key_update_requests == 0)
+        return 0;
+    --tls->key_update_requests;
+    return 1;
+}
+
 int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inlen)
 {
     int ret;
 
+    if (tls->tx_detached)
+        return PTLS_ERROR_NOT_AVAILABLE;
     assert(tls->traffic_protection.enc.aead != NULL);
     if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
         return ret;
@@ -6266,6 +6416,8 @@ int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inl
 
 int ptls_update_key(ptls_t *tls, int request_update)
 {
+    if (tls->tx_detached)
+        return PTLS_ERROR_NOT_AVAILABLE;
     assert(tls->ctx->update_traffic_key == NULL);
     tls->needs_key_update = 1;
     tls->key_update_send_request = request_update;
@@ -6274,6 +6426,8 @@ int ptls_update_key(ptls_t *tls, int request_update)
 
 size_t ptls_get_record_overhead(ptls_t *tls)
 {
+    if (tls->tx_detached)
+        return 0;
     ptls_aead_algorithm_t *algo = tls->traffic_protection.enc.aead->algo;
 
     if (tls->traffic_protection.enc.tls12) {
@@ -6288,6 +6442,8 @@ int ptls_send_alert(ptls_t *tls, ptls_buffer_t *sendbuf, uint8_t level, uint8_t 
     size_t rec_start = sendbuf->off;
     int ret = 0;
 
+    if (tls->tx_detached)
+        return PTLS_ERROR_NOT_AVAILABLE;
     if ((ret = buffer_require_direction(sendbuf, 1)) != 0)
         return ret;
     buffer_push_record(sendbuf, PTLS_CONTENT_TYPE_ALERT, { ptls_buffer_push(sendbuf, level, description); });

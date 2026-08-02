@@ -336,6 +336,7 @@ extern "C" {
 #define PTLS_DEFAULT_MAX_TICKETS_TO_SERVE 4
 
 typedef struct st_ptls_t ptls_t;
+typedef struct st_ptls_tx_t ptls_tx_t;
 typedef struct st_ptls_context_t ptls_context_t;
 typedef struct st_ptls_key_schedule_t ptls_key_schedule_t;
 
@@ -1786,6 +1787,45 @@ int ptls_send(ptls_t *tls, ptls_buffer_t *sendbuf, const void *input, size_t inl
  * updates the send traffic key (as well as asks the peer to update)
  */
 int ptls_update_key(ptls_t *tls, int request_update);
+/**
+ * Detaches post-handshake record transmission from `tls`. The returned object owns the outbound traffic secret, AEAD context,
+ * record sequence, and TLS 1.2 explicit-IV state. After success, the send, send-alert, update-key, and export APIs are unavailable
+ * on `tls`; receive-side APIs remain available. Outbound secret-log callbacks run synchronously on the thread calling
+ * `ptls_tx_send` or `ptls_tx_update_key`.
+ */
+int ptls_detach_tx(ptls_t *tls, ptls_tx_t **tx);
+/**
+ * releases detached outbound record-protection state
+ */
+void ptls_tx_free(ptls_tx_t *tx);
+/**
+ * encrypts application data using detached outbound record-protection state
+ */
+int ptls_tx_send(ptls_tx_t *tx, ptls_buffer_t *sendbuf, const void *input, size_t inlen);
+/**
+ * emits a KeyUpdate using the current key and installs the next outbound key before returning
+ */
+int ptls_tx_update_key(ptls_tx_t *tx, ptls_buffer_t *sendbuf, int request_update);
+/**
+ * encrypts and emits an alert using detached outbound record-protection state
+ */
+int ptls_tx_send_alert(ptls_tx_t *tx, ptls_buffer_t *sendbuf, uint8_t level, uint8_t description);
+/**
+ * returns the cipher suite used by detached outbound record protection
+ */
+ptls_cipher_suite_t *ptls_tx_get_cipher(ptls_tx_t *tx);
+/**
+ * returns the protocol version used by detached outbound record protection
+ */
+uint16_t ptls_tx_get_protocol_version(ptls_tx_t *tx);
+/**
+ * returns per-record overhead for detached outbound record protection
+ */
+size_t ptls_tx_get_record_overhead(ptls_tx_t *tx);
+/**
+ * consumes one pending peer request for a reciprocal KeyUpdate; returns one when consumed, otherwise zero
+ */
+int ptls_take_key_update_request(ptls_t *tls);
 /**
  * Returns if the context is a server context.
  */

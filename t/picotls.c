@@ -1083,8 +1083,14 @@ enum {
     TEST_HANDSHAKE_HRR,
     TEST_HANDSHAKE_HRR_STATELESS,
     TEST_HANDSHAKE_EARLY_DATA,
-    TEST_HANDSHAKE_KEY_UPDATE
+    TEST_HANDSHAKE_KEY_UPDATE,
+    TEST_HANDSHAKE_TX_DETACH
 };
+
+static ptls_hash_context_t *fail_hash_create(void)
+{
+    return NULL;
+}
 
 static int on_extension_cb(ptls_on_extension_t *self, ptls_t *tls, uint8_t hstype, uint16_t exttype, ptls_iovec_t extdata)
 {
@@ -1138,6 +1144,7 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
                            int transfer_session)
 {
     ptls_t *client, *server;
+    ptls_tx_t *client_tx = NULL, *server_tx = NULL;
     ptls_handshake_properties_t client_hs_prop = {{{{NULL}, ticket}}}, server_hs_prop = {{{{NULL}}}};
     uint8_t cbuf_small[16384], sbuf_small[16384], decbuf_small[16384];
     ptls_buffer_t cbuf, sbuf, decbuf;
@@ -1401,6 +1408,157 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
         decbuf.off = 0;
     }
 
+    if (mode == TEST_HANDSHAKE_TX_DETACH) {
+        static const char client_msg[] = "detached client data";
+        static const char server_msg[] = "detached server data";
+        static const char update_msg[] = "data after update";
+        static const char automatic_msg[] = "data after automatic update";
+        ptls_cipher_suite_t *cipher = ptls_get_cipher(client);
+        ptls_tx_t *duplicate_tx = NULL;
+        struct st_ptls_hash_algorithm_t fail_hash = *cipher->hash;
+        struct st_ptls_cipher_suite_t fail_cipher = *cipher;
+        ptls_update_traffic_key_t quic_key_cb = {NULL};
+        ptls_update_traffic_key_t *saved_key_cb;
+        uint8_t key[PTLS_MAX_SECRET_SIZE], iv[PTLS_MAX_IV_SIZE];
+        uint64_t seq;
+
+        /* External record layers such as QUIC continue to reject record-state detach. */
+        saved_key_cb = client->ctx->update_traffic_key;
+        client->ctx->update_traffic_key = &quic_key_cb;
+        ok(ptls_detach_tx(client, &client_tx) == PTLS_ERROR_NOT_AVAILABLE);
+        ok(client_tx == NULL);
+        client->ctx->update_traffic_key = saved_key_cb;
+
+        /* Failure while creating the Tx-owned key-update state must leave ownership with the source. */
+        fail_hash.create = fail_hash_create;
+        fail_cipher.hash = &fail_hash;
+        client->cipher_suite = &fail_cipher;
+        ok(ptls_detach_tx(client, &client_tx) == PTLS_ERROR_NO_MEMORY);
+        ok(client_tx == NULL);
+        ok(client->traffic_protection.enc.aead != NULL);
+        client->cipher_suite = cipher;
+
+        /* A local update requested immediately before detach transfers with the outbound state. */
+        ok(ptls_update_key(client, 0) == 0);
+        ok(ptls_detach_tx(client, &client_tx) == 0);
+        ok(ptls_detach_tx(server, &server_tx) == 0);
+        ok(client_tx != NULL);
+        ok(server_tx != NULL);
+        ok(ptls_detach_tx(client, &duplicate_tx) == PTLS_ERROR_NOT_AVAILABLE);
+        ok(duplicate_tx == NULL);
+        ok(ptls_tx_get_cipher(client_tx) == cipher);
+        ok(ptls_tx_get_protocol_version(client_tx) == PTLS_PROTOCOL_VERSION_TLS13);
+        ok(ptls_get_protocol_version(client) == PTLS_PROTOCOL_VERSION_TLS13);
+        ok(ptls_tx_get_record_overhead(client_tx) == 5 + 1 + cipher->aead->tag_size);
+        ok(ptls_get_record_overhead(client) == 0);
+        ok(ptls_get_traffic_keys(client, 1, key, iv, &seq) == PTLS_ERROR_NOT_AVAILABLE);
+        ok(ptls_get_traffic_keys(client, 0, key, iv, &seq) == 0);
+        ok(ptls_export(server, &sbuf) == PTLS_ERROR_NOT_AVAILABLE);
+        ok(sbuf.off == 0);
+
+        ok(ptls_send(client, &cbuf, client_msg, sizeof(client_msg) - 1) == PTLS_ERROR_NOT_AVAILABLE);
+        ok(ptls_update_key(client, 1) == PTLS_ERROR_NOT_AVAILABLE);
+        ok(ptls_send_alert(client, &cbuf, PTLS_ALERT_LEVEL_WARNING, PTLS_ALERT_CLOSE_NOTIFY) == PTLS_ERROR_NOT_AVAILABLE);
+
+        /* Both original objects remain the receive-side owners after detach. */
+        ok(ptls_tx_send(client_tx, &cbuf, client_msg, sizeof(client_msg) - 1) == 0);
+        consumed = cbuf.off;
+        ok(ptls_receive(server, &decbuf, cbuf.base, &consumed) == 0);
+        ok(consumed == cbuf.off);
+        ok(decbuf.off == sizeof(client_msg) - 1);
+        ok(memcmp(decbuf.base, client_msg, sizeof(client_msg) - 1) == 0);
+        cbuf.off = 0;
+        decbuf.off = 0;
+
+        {
+            _Alignas(64) uint8_t inplace_small[256];
+            ptls_buffer_t inplace;
+            void *origin = &inplace;
+
+            ptls_buffer_init_tx(&inplace, inplace_small, sizeof(inplace_small));
+            inplace.origin = origin;
+            inplace.align_bits = cipher->aead->align_bits;
+            memcpy(inplace.base + 5, client_msg, sizeof(client_msg) - 1);
+            ok(ptls_tx_send(client_tx, &inplace, inplace.base + 5, sizeof(client_msg) - 1) == 0);
+            ok(PTLS_MEMORY_DEBUG ? inplace.base != inplace_small : inplace.base == inplace_small);
+            ok(inplace.origin == origin);
+            ok(inplace.align_bits == cipher->aead->align_bits);
+            consumed = inplace.off;
+            ok(ptls_receive(server, &decbuf, inplace.base, &consumed) == 0);
+            ok(consumed == inplace.off);
+            ok(decbuf.off == sizeof(client_msg) - 1);
+            ok(memcmp(decbuf.base, client_msg, sizeof(client_msg) - 1) == 0);
+            ptls_buffer_dispose(&inplace);
+            decbuf.off = 0;
+        }
+
+        ok(ptls_tx_send(server_tx, &sbuf, server_msg, sizeof(server_msg) - 1) == 0);
+        consumed = sbuf.off;
+        ok(ptls_receive(client, &decbuf, sbuf.base, &consumed) == 0);
+        ok(consumed == sbuf.off);
+        ok(decbuf.off == sizeof(server_msg) - 1);
+        ok(memcmp(decbuf.base, server_msg, sizeof(server_msg) - 1) == 0);
+        sbuf.off = 0;
+        decbuf.off = 0;
+
+        /* The update-request record is encrypted under the old key; following data uses the new key. */
+        ok(ptls_tx_update_key(server_tx, &sbuf, 1) == 0);
+        ok(ptls_tx_send(server_tx, &sbuf, update_msg, sizeof(update_msg) - 1) == 0);
+        consumed = sbuf.off;
+        ok(ptls_receive(client, &decbuf, sbuf.base, &consumed) == 0);
+        ok(consumed == sbuf.off);
+        ok(decbuf.off == sizeof(update_msg) - 1);
+        ok(memcmp(decbuf.base, update_msg, sizeof(update_msg) - 1) == 0);
+        ok(ptls_take_key_update_request(client) == 1);
+        ok(ptls_take_key_update_request(client) == 0);
+        sbuf.off = 0;
+        decbuf.off = 0;
+
+        /* A reciprocal response is serialized before data and does not request another response. */
+        ok(ptls_tx_update_key(client_tx, &cbuf, 0) == 0);
+        ok(ptls_tx_send(client_tx, &cbuf, update_msg, sizeof(update_msg) - 1) == 0);
+        consumed = cbuf.off;
+        ok(ptls_receive(server, &decbuf, cbuf.base, &consumed) == 0);
+        ok(consumed == cbuf.off);
+        ok(decbuf.off == sizeof(update_msg) - 1);
+        ok(memcmp(decbuf.base, update_msg, sizeof(update_msg) - 1) == 0);
+        ok(ptls_take_key_update_request(server) == 0);
+        cbuf.off = 0;
+        decbuf.off = 0;
+
+        /* A peer cannot wrap or silently lose the bounded response count. */
+        client->key_update_requests = UINT32_MAX;
+        ok(ptls_tx_update_key(server_tx, &sbuf, 1) == 0);
+        consumed = sbuf.off;
+        ok(ptls_receive(client, &decbuf, sbuf.base, &consumed) == PTLS_ALERT_INTERNAL_ERROR);
+        ok(consumed == sbuf.off);
+        ok(client->key_update_requests == UINT32_MAX);
+        client->key_update_requests = 0;
+        sbuf.off = 0;
+        decbuf.off = 0;
+
+        /* The confidentiality-limit path emits KeyUpdate before encrypting this application record. */
+        client_tx->tls.traffic_protection.enc.seq = 16777216;
+        server->traffic_protection.dec.seq = 16777216;
+        ok(ptls_tx_send(client_tx, &cbuf, automatic_msg, sizeof(automatic_msg) - 1) == 0);
+        consumed = cbuf.off;
+        ok(ptls_receive(server, &decbuf, cbuf.base, &consumed) == 0);
+        ok(consumed == cbuf.off);
+        ok(decbuf.off == sizeof(automatic_msg) - 1);
+        ok(memcmp(decbuf.base, automatic_msg, sizeof(automatic_msg) - 1) == 0);
+        ok(ptls_take_key_update_request(server) == 0);
+        cbuf.off = 0;
+        decbuf.off = 0;
+
+        /* Alerts consume the same detached sequence and remain decryptable after application data. */
+        ok(ptls_tx_send_alert(server_tx, &sbuf, PTLS_ALERT_LEVEL_WARNING, PTLS_ALERT_CLOSE_NOTIFY) == 0);
+        consumed = sbuf.off;
+        ok(ptls_receive(client, &decbuf, sbuf.base, &consumed) == PTLS_ERROR_CLASS_PEER_ALERT + PTLS_ALERT_CLOSE_NOTIFY);
+        ok(consumed == sbuf.off);
+        ok(decbuf.off == 0);
+        sbuf.off = 0;
+    }
+
     /* original_server is used for the server-side checks because handshake data is never migrated */
     if (ctx_peer->ech.server.create_opener != NULL && test_client_ech_configs.len > 0) {
         ok(ptls_is_ech_handshake(client, NULL, NULL, NULL));
@@ -1413,7 +1571,16 @@ static void test_handshake(ptls_iovec_t ticket, int mode, int expect_ticket, int
     ptls_buffer_dispose(&cbuf);
     ptls_buffer_dispose(&sbuf);
     ptls_buffer_dispose(&decbuf);
-    ptls_free(client);
+    if (mode == TEST_HANDSHAKE_TX_DETACH) {
+        /* Exercise source-before-Tx and Tx-before-source destruction. */
+        ptls_free(client);
+        ptls_tx_free(client_tx);
+        ptls_tx_free(server_tx);
+    } else {
+        ptls_tx_free(client_tx);
+        ptls_tx_free(server_tx);
+        ptls_free(client);
+    }
     if (original_server != server)
         ptls_free(original_server);
     ptls_free(server);
@@ -1515,6 +1682,122 @@ static void test_key_update(void)
 {
     test_handshake(ptls_iovec_init(NULL, 0), TEST_HANDSHAKE_KEY_UPDATE, 0, 0, 0, 0);
     test_handshake(ptls_iovec_init(NULL, 0), TEST_HANDSHAKE_KEY_UPDATE, 0, 0, 0, 1);
+}
+
+static void test_tx_detach(void)
+{
+    test_handshake(ptls_iovec_init(NULL, 0), TEST_HANDSHAKE_TX_DETACH, 0, 0, 0, 0);
+}
+
+static ptls_t *import_tls12_record_state(ptls_context_t *tls12ctx, ptls_cipher_suite_t *cipher, int is_server)
+{
+    uint8_t master_secret[PTLS_TLS12_MASTER_SECRET_SIZE], hello_randoms[PTLS_HELLO_RANDOM_SIZE * 2], params_small[512];
+    ptls_buffer_t params;
+    ptls_t *tls = NULL;
+    int ret;
+
+    for (size_t i = 0; i != sizeof(master_secret); ++i)
+        master_secret[i] = (uint8_t)(0x40 + i);
+    for (size_t i = 0; i != sizeof(hello_randoms); ++i)
+        hello_randoms[i] = (uint8_t)(0x80 + i);
+
+    ptls_buffer_init_tx(&params, params_small, sizeof(params_small));
+    ret = ptls_build_tls12_export_params(tls12ctx, &params, is_server, 0, cipher, master_secret, hello_randoms, 1, "localhost",
+                                         ptls_iovec_init(NULL, 0));
+    if (ret == 0)
+        ret = ptls_import(tls12ctx, &tls, ptls_iovec_init(params.base, params.off));
+    ptls_buffer_dispose(&params);
+    return ret == 0 ? tls : NULL;
+}
+
+static void test_tx_detach_tls12_one(ptls_cipher_suite_t *cipher)
+{
+    ptls_cipher_suite_t *tls12_ciphers[] = {cipher, NULL};
+    ptls_context_t tls12ctx = {0};
+    ptls_t *client, *server;
+    ptls_tx_t *client_tx = NULL, *server_tx = NULL;
+    _Alignas(64) uint8_t wire_small[256];
+    uint8_t clear_small[256];
+    ptls_buffer_t wire, clear;
+    static const char message[] = "detached TLS 1.2 data";
+    size_t consumed;
+
+    tls12ctx.random_bytes = ptls_minicrypto_random_bytes;
+    tls12ctx.get_time = &ptls_get_time;
+    tls12ctx.tls12_cipher_suites = tls12_ciphers;
+    client = import_tls12_record_state(&tls12ctx, cipher, 0);
+    server = import_tls12_record_state(&tls12ctx, cipher, 1);
+    ok(client != NULL);
+    ok(server != NULL);
+    if (client == NULL || server == NULL)
+        goto Exit;
+
+    ok(ptls_detach_tx(client, &client_tx) == 0);
+    ok(ptls_detach_tx(server, &server_tx) == 0);
+    ok(client_tx != NULL);
+    ok(server_tx != NULL);
+    ok(ptls_tx_get_protocol_version(client_tx) == PTLS_PROTOCOL_VERSION_TLS12);
+    ok(ptls_get_protocol_version(client) == PTLS_PROTOCOL_VERSION_TLS12);
+    ok(ptls_tx_get_record_overhead(client_tx) == 5 + cipher->aead->tls12.record_iv_size + cipher->aead->tag_size);
+
+    ptls_buffer_init_tx(&wire, wire_small, sizeof(wire_small));
+    wire.origin = &wire;
+    wire.align_bits = cipher->aead->align_bits;
+    memcpy(wire.base + 5 + cipher->aead->tls12.record_iv_size, message, sizeof(message) - 1);
+    ok(ptls_tx_send(client_tx, &wire, wire.base + 5 + cipher->aead->tls12.record_iv_size, sizeof(message) - 1) == 0);
+    ok(PTLS_MEMORY_DEBUG ? wire.base != wire_small : wire.base == wire_small);
+    ok(wire.origin == &wire);
+    if (cipher->aead->tls12.record_iv_size != 0) {
+        uint64_t record_iv = 0;
+        for (size_t i = 0; i != cipher->aead->tls12.record_iv_size; ++i)
+            record_iv = (record_iv << 8) | wire.base[5 + i];
+        ok(record_iv == 1);
+    }
+    ptls_buffer_init_rx(&clear, clear_small, sizeof(clear_small));
+    consumed = wire.off;
+    ok(ptls_receive(server, &clear, wire.base, &consumed) == 0);
+    ok(consumed == wire.off);
+    ok(clear.off == sizeof(message) - 1);
+    ok(memcmp(clear.base, message, sizeof(message) - 1) == 0);
+    wire.off = 0;
+    clear.off = 0;
+
+    ok(ptls_tx_send(server_tx, &wire, message, sizeof(message) - 1) == 0);
+    consumed = wire.off;
+    ok(ptls_receive(client, &clear, wire.base, &consumed) == 0);
+    ok(consumed == wire.off);
+    ok(clear.off == sizeof(message) - 1);
+    ok(memcmp(clear.base, message, sizeof(message) - 1) == 0);
+    wire.off = 0;
+    ok(ptls_tx_update_key(client_tx, &wire, 0) == PTLS_ERROR_NOT_AVAILABLE);
+    ok(wire.off == 0);
+
+    ptls_buffer_dispose(&wire);
+    ptls_buffer_dispose(&clear);
+
+Exit:
+    /* Exercise both ownership destruction orders for imported TLS 1.2 state. */
+    if (client != NULL)
+        ptls_free(client);
+    ptls_tx_free(client_tx);
+    ptls_tx_free(server_tx);
+    if (server != NULL)
+        ptls_free(server);
+}
+
+static void test_tx_detach_tls12(void)
+{
+    struct st_ptls_cipher_suite_t aes128gcm = {.id = PTLS_CIPHER_SUITE_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+                                               .aead = &ptls_minicrypto_aes128gcm,
+                                               .hash = &ptls_minicrypto_sha256,
+                                               .name = PTLS_CIPHER_SUITE_NAME_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    struct st_ptls_cipher_suite_t chacha20poly1305 = {.id = PTLS_CIPHER_SUITE_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+                                                      .aead = &ptls_minicrypto_chacha20poly1305,
+                                                      .hash = &ptls_minicrypto_sha256,
+                                                      .name = PTLS_CIPHER_SUITE_NAME_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256};
+
+    subtest("aes128gcm-explicit-iv", test_tx_detach_tls12_one, &aes128gcm);
+    subtest("chacha20poly1305-implicit-nonce", test_tx_detach_tls12_one, &chacha20poly1305);
 }
 
 static void test_hrr_handshake(void)
@@ -2455,6 +2738,7 @@ static void test_all_handshakes_core(void)
         subtest("stateless-hrr-aad-change", test_stateless_hrr_aad_change);
     }
     subtest("key-update", test_key_update);
+    subtest("tx-detach", test_tx_detach);
     subtest("pre-shared-key", test_pre_shared_key);
     subtest("handshake-api", test_handshake_api);
 }
@@ -2886,6 +3170,7 @@ void test_picotls(void)
     subtest("ech", test_ech);
     subtest("fragmented-message", test_fragmented_message);
     subtest("handshake", test_all_handshakes);
+    subtest("tx-detach-tls12", test_tx_detach_tls12);
     subtest("quic", test_quic);
     subtest("legacy-ch", test_legacy_ch);
     subtest("ptls_escape_json_unsafe_string", test_escape_json_unsafe_string);
